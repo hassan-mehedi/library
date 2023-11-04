@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import AppBar from "@mui/material/AppBar";
 import Button from "@mui/material/Button";
 import Card from "@mui/material/Card";
@@ -11,22 +11,29 @@ import Box from "@mui/material/Box";
 import Toolbar from "@mui/material/Toolbar";
 import Typography from "@mui/material/Typography";
 import Container from "@mui/material/Container";
-import ImportContactsIcon from "@mui/icons-material/ImportContacts";
-import BookIcon from "@mui/icons-material/Book";
 import Paper from "@mui/material/Paper";
 import InputBase from "@mui/material/InputBase";
 import Divider from "@mui/material/Divider";
 import IconButton from "@mui/material/IconButton";
 import Drawer from "@mui/material/Drawer";
-import SearchIcon from "@mui/icons-material/Search";
 import Tooltip from "@mui/material/Tooltip";
 import { createTheme, ThemeProvider } from "@mui/material/styles";
 
-import { fetchSearchedBooks, fetchBooksFromBookShelves } from "./api/books";
+// Import Icons
+import BookIcon from "@mui/icons-material/Book";
+import SearchIcon from "@mui/icons-material/Search";
+import CustomizedSnackbars from "./components/snackbar";
+import CircularProgress from "@mui/material/CircularProgress";
+import ImportContactsIcon from "@mui/icons-material/ImportContacts";
+
+// Import API's
+import { fetchSearchedBooks, fetchBooksFromBookShelves, addBookToBookShelves } from "./api/books";
+import { getNewAccessToken } from "./api/auth";
+
+// Import Assets
 import ImageNotFound from "./assets/image-not-found.jpg";
 
-const cards = [1, 2, 3, 4, 5, 6, 7, 8, 9];
-
+// Create Default MUI Theme
 const defaultTheme = createTheme();
 
 export default function Album() {
@@ -34,21 +41,55 @@ export default function Album() {
     const [searchedBooks, setSearchedBooks] = useState([]);
     const [bookShelveBooks, setBookShelveBooks] = useState([]);
     const [searchQuery, setSearchQuery] = useState("");
+    const [accessToken, setAccessToken] = useState("");
+    const [open, setOpen] = useState(false);
+    const [addButtonloading, setAddButtonLoading] = useState([]);
+    const [searchButtonloading, setSearchButtonLoading] = useState(false);
+    const [message, setMessage] = useState("");
+    const [severity, setSeverity] = useState("info");
 
-    const toggleDrawer = state => {
-        setDrawerOpen(state);
-
-        if (state) {
-            fetchBooksFromBookShelves().then(data => {
-                setBookShelveBooks(data.items);
-            });
+    // Handle Snackbar Close Event
+    const handleClose = (event, reason) => {
+        if (reason === "clickaway") {
+            return;
         }
+
+        setOpen(false);
     };
 
+    useEffect(() => {
+        if (!navigator.onLine) {
+            updateSnackBarState("Looks like a connection issue. Make sure you're online and try again.", "error", true);
+        }
+
+        // Get Access Token To Add Books To BookShelves
+        getNewAccessToken().then(data => {
+            setAccessToken(data.access_token);
+        });
+
+        // Fetch Previously Added Books
+        updateSnackBarState("Getting your books", "info", true);
+        fetchBooksFromBookShelves().then(res => {
+            if (res.status === 200) {
+                setBookShelveBooks(res.data.items);
+                updateSnackBarState("Your bookshelf is ready", "success", true);
+            } else {
+                errorHandler(res.status);
+            }
+        });
+    }, []);
+
+    // Handle BookShelf Drawer
+    const toggleDrawer = state => {
+        setDrawerOpen(state);
+    };
+
+    // Handle Search Input
     const handleInput = event => {
         setSearchQuery(event.target.value);
     };
 
+    // Handle 'Enter' Key Press While User Searches
     const handleKeyPress = event => {
         if (event.key === "Enter") {
             event.preventDefault();
@@ -56,9 +97,81 @@ export default function Album() {
         }
     };
 
+    // Handle Various Errors
+    const errorHandler = status => {
+        if (status === 404) {
+            updateSnackBarState("No books found matching your search. Perhaps try different keywords?", "error", true);
+        } else if (status === 429) {
+            updateSnackBarState("You've been reading too fast! Please wait a bit and try searching again.", "error", true);
+        } else if (status === 500) {
+            updateSnackBarState(`Our digital library is currently under maintenance. Please come backlater!`, "error", true);
+        }
+    };
+
+    // Search Handler For Books, Authors or Any Keywords
     const handleSearch = () => {
-        fetchSearchedBooks(searchQuery).then(data => {
-            setSearchedBooks(data.items);
+        setSearchButtonLoading(true);
+        fetchSearchedBooks(searchQuery).then(res => {
+            if (res.status === 200) {
+                if (res.data.totalItems === 0) {
+                    updateSnackBarState("No books found matching your search. Perhaps try different keywords?", "error", true);
+                } else {
+                    setSearchedBooks(res.data.items);
+                    setSearchButtonLoading(false);
+                    updateSnackBarState("We found what you were looking for", "success", true);
+                }
+            } else {
+                errorHandler(res.status);
+            }
+        });
+    };
+
+    // Loading Handler For 'Add to library' Button
+    const updateButtonLoadingState = (volumeId, state) => {
+        let loading = addButtonloading.slice();
+        loading[volumeId] = state;
+        setAddButtonLoading(loading);
+    };
+
+    // Status Handler
+    const updateSnackBarState = (message, severity, state) => {
+        setMessage(message);
+        setSeverity(severity);
+        setOpen(state);
+    };
+
+    // Bookshelf Handler
+    const addToBookShelve = volumeId => {
+        // Handling loading for each button
+        updateButtonLoadingState(volumeId, true);
+        // Update snackbar state
+        updateSnackBarState("Please wait for google api to update bookshelves...", "info", true);
+
+        addBookToBookShelves(volumeId, accessToken).then(res => {
+            if (res.status === 200) {
+                setTimeout(() => {
+                    // Google book api takes some time to update it's shelves
+                    // That's why we fetch after waiting for 10 seconds
+                    // We set the loader to false after getting the updated booksshelf
+                    fetchBooksFromBookShelves().then(res => {
+                        if (res.status === 200) {
+                            setBookShelveBooks(res.data.items);
+                            // Handling loading for each button
+                            updateButtonLoadingState(volumeId, false);
+                            // Update snackbar state
+                            updateSnackBarState("Successfully added", "success", true);
+                        } else {
+                            // Handling loading for each button
+                            updateButtonLoadingState(volumeId, false);
+                            updateSnackBarState("Error occured", "error", true);
+                        }
+                    });
+                }, 10000);
+            } else {
+                // Handling loading for each button
+                updateButtonLoadingState(volumeId, false);
+                errorHandler(res.status);
+            }
         });
     };
 
@@ -92,9 +205,23 @@ export default function Album() {
                                 onKeyDown={handleKeyPress}
                             />
                             <Divider sx={{ height: 28, m: 0.5 }} orientation="vertical" />
-                            <IconButton type="button" sx={{ p: "10px" }} aria-label="search" onClick={handleSearch}>
-                                <SearchIcon />
-                            </IconButton>
+                            <Box sx={{ position: "relative" }}>
+                                <IconButton type="button" sx={{ p: "10px" }} aria-label="search" onClick={handleSearch}>
+                                    <SearchIcon />
+                                </IconButton>
+                                {searchButtonloading && (
+                                    <CircularProgress
+                                        size={31}
+                                        sx={{
+                                            color: "green",
+                                            position: "absolute",
+                                            top: 5,
+                                            left: 5,
+                                            zIndex: 1,
+                                        }}
+                                    />
+                                )}
+                            </Box>
                         </Paper>
                     </Container>
                 </Box>
@@ -125,9 +252,32 @@ export default function Album() {
                                             </Tooltip>
                                         </CardContent>
                                         <CardActions>
-                                            <Button size="small" sx={{ textTransform: "none" }}>
-                                                Add to library
-                                            </Button>
+                                            <Box sx={{ m: 1, position: "relative" }}>
+                                                <Button
+                                                    size="small"
+                                                    variant="contained"
+                                                    sx={{ textTransform: "none" }}
+                                                    disabled={addButtonloading[book.id]}
+                                                    onClick={() => {
+                                                        addToBookShelve(book.id);
+                                                    }}
+                                                >
+                                                    Add to library
+                                                </Button>
+                                                {addButtonloading[book.id] && (
+                                                    <CircularProgress
+                                                        size={24}
+                                                        sx={{
+                                                            color: "green",
+                                                            position: "absolute",
+                                                            top: "50%",
+                                                            left: "50%",
+                                                            marginTop: "-12px",
+                                                            marginLeft: "-12px",
+                                                        }}
+                                                    />
+                                                )}
+                                            </Box>
                                         </CardActions>
                                     </Card>
                                 </Grid>
@@ -141,7 +291,7 @@ export default function Album() {
                         toggleDrawer(false);
                     }}
                 >
-                    <Box sx={{ maxWidth: 350, p: 2 }} role="presentation" onClick={() => {}} onKeyDown={() => {}}>
+                    <Box sx={{ maxWidth: 350, minWidth: 300, p: 2 }}>
                         <div style={{ display: "flex", flexDirection: "row", justifyContent: "space-between", marginBottom: "16px" }}>
                             <Typography variant="h4" color="inherit" textAlign="left">
                                 Bookshelve
@@ -175,24 +325,14 @@ export default function Album() {
                                                 <Typography gutterBottom variant="subtitle2">
                                                     Author(s): {book.volumeInfo.authors?.join(", ")}
                                                 </Typography>
-                                                <Tooltip title={book.volumeInfo.description} arrow={true}>
-                                                    <Typography paragraph={true}>
-                                                        {" "}
-                                                        {book.volumeInfo.description?.substring(0, 100) || `[No Description Found]`}
-                                                    </Typography>
-                                                </Tooltip>
                                             </CardContent>
-                                            <CardActions>
-                                                <Button size="small" sx={{ textTransform: "none" }} color="error">
-                                                    Remove from library
-                                                </Button>
-                                            </CardActions>
                                         </Card>
                                     </Grid>
                                 ))}
                         </Grid>
                     </Box>
                 </Drawer>
+                {open && <CustomizedSnackbars open={open} handleClose={handleClose} message={message} severity={severity} />}
             </main>
         </ThemeProvider>
     );
